@@ -12,41 +12,35 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// ProviderAzureIMDS reads from Azure's Instance Metadata Service (IMDS) API.
-type ProviderAzureIMDS struct {
-	client      *http.Client
-	providerOVF *ProviderAzureOVF
+// ProviderAzure reads from Azure's Instance Metadata Service (IMDS) API.
+type ProviderAzure struct {
+	client *http.Client
 }
 
-// NewAzureIMDS factory
-func NewAzureIMDS() *ProviderAzureIMDS {
+// NewAzure factory
+func NewAzure() *ProviderAzure {
 	client := &http.Client{
 		Timeout: time.Second * 2,
 	}
-	return &ProviderAzureIMDS{
-		client:      client,
-		providerOVF: NewAzureOVF(client),
+	return &ProviderAzure{
+		client: client,
 	}
 }
 
-func (p *ProviderAzureIMDS) String() string {
-	return "Azure-IMDS"
+func (p *ProviderAzure) String() string {
+	return "Azure"
 }
 
 // Probe checks if Azure IMDS API is available
-func (p *ProviderAzureIMDS) Probe() bool {
+func (p *ProviderAzure) Probe() bool {
 	// "Poll" VM Unique ID
 	// See: https://azure.microsoft.com/en-us/blog/accessing-and-using-azure-vm-unique-id/
-	if _, err := p.imdsGet("compute/vmId"); err != nil {
-		log.Debugf("%s: Probe failed: %s", p.String(), err)
-		return false
-	}
-	// Probe fallback provider
-	return p.providerOVF.Probe()
+	_, err := p.imdsGet("compute/vmId")
+	return (err == nil)
 }
 
 // Extract user data via Azure IMDS.
-func (p *ProviderAzureIMDS) Extract() ([]byte, error) {
+func (p *ProviderAzure) Extract() ([]byte, error) {
 	if err := p.saveHostname(); err != nil {
 		return nil, fmt.Errorf("%s: %s", p.String(), err)
 	}
@@ -67,7 +61,7 @@ func (p *ProviderAzureIMDS) Extract() ([]byte, error) {
 	return userData, nil
 }
 
-func (p *ProviderAzureIMDS) saveHostname() error {
+func (p *ProviderAzure) saveHostname() error {
 	hostname, err := p.imdsGet("compute/name")
 	if err != nil {
 		return err
@@ -80,7 +74,7 @@ func (p *ProviderAzureIMDS) saveHostname() error {
 	return nil
 }
 
-func (p *ProviderAzureIMDS) saveSSHKeys() error {
+func (p *ProviderAzure) saveSSHKeys() error {
 	// TODO support multiple keys
 	sshKey, err := p.imdsGet("compute/publicKeys/0/keyData")
 	if err != nil {
@@ -98,7 +92,7 @@ func (p *ProviderAzureIMDS) saveSSHKeys() error {
 }
 
 // Get resource value from IMDS and write to file in ConfigPath
-func (p *ProviderAzureIMDS) imdsSave(resourceName string) {
+func (p *ProviderAzure) imdsSave(resourceName string) {
 	if value, err := p.imdsGet(resourceName); err == nil {
 		fileName := strings.Replace(resourceName, "/", "_", -1)
 		err = ioutil.WriteFile(path.Join(ConfigPath, fileName), value, 0644)
@@ -112,7 +106,7 @@ func (p *ProviderAzureIMDS) imdsSave(resourceName string) {
 }
 
 // Get IMDS resource value
-func (p *ProviderAzureIMDS) imdsGet(resourceName string) ([]byte, error) {
+func (p *ProviderAzure) imdsGet(resourceName string) ([]byte, error) {
 	req, err := http.NewRequest("GET", imdsURL(resourceName), nil)
 	if err != nil {
 		return nil, fmt.Errorf("http.NewRequest failed: %s", err)
@@ -140,10 +134,8 @@ func (p *ProviderAzureIMDS) imdsGet(resourceName string) ([]byte, error) {
 // For available nodes, see: https://docs.microsoft.com/en-us/azure/virtual-machines/windows/instance-metadata-service
 func imdsURL(node string) string {
 	const (
-		baseURL = "http://169.254.169.254/metadata/instance"
-		// TODO Version 2020-10-01 might not yet be available in every region
-		//apiVersion = "2020-10-01"
-		apiVersion = "2020-09-01"
+		baseURL    = "http://169.254.169.254/metadata/instance"
+		apiVersion = "2021-01-01"
 		// For leaf nodes in /metadata/instance, the format=json doesn't work.
 		// For these queries, format=text needs to be explicitly specified
 		// because the default format is JSON.
@@ -155,35 +147,14 @@ func imdsURL(node string) string {
 	return baseURL + params
 }
 
-func (p *ProviderAzureIMDS) getUserData() ([]byte, error) {
-	userData, err := p.imdsGet("compute/customData")
+func (p *ProviderAzure) getUserData() ([]byte, error) {
+	userData, err := p.imdsGet("compute/userData")
 	if err != nil {
 		log.Errorf("Failed to get user data: %s", err)
 		return nil, err
 	}
 
-	// TODO
-	// Fallback OVF provider will report ready
-	// defer ReportReady(p.client)
+	defer ReportReady(p.client)
 
-	if len(userData) > 0 { // Always false
-		log.Warnf("%s: Unexpectedly received user data: \n%s", p.String(), string(userData))
-		// TODO
-		// Getting user data via IMDS is disabled. See blocking upstream issue:
-		//  * https://github.com/MicrosoftDocs/azure-docs/issues/64154
-		//  * https://github.com/MicrosoftDocs/azure-docs/issues/30370 (OP)
-		// return userData, nil
-	}
-
-	// log.Debugf("%s: user data is empty", p.String())
-	// return nil, nil
-
-	// Fallback
-	log.Debugf(
-		"%s: user data retrieval is disabled for this provider.\n"+
-			"Falling back to  %s provider",
-		p.String(),
-		p.providerOVF.String())
-	return p.providerOVF.Extract()
-
+	return userData, nil
 }
