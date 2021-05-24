@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -148,11 +149,19 @@ func imdsURL(node string) string {
 }
 
 func (p *ProviderAzure) getUserData() ([]byte, error) {
-	userData, err := p.imdsGet("compute/userData")
+	userDataBase64, err := p.imdsGet("compute/userData")
 	if err != nil {
 		log.Errorf("Failed to get user data: %s", err)
 		return nil, err
 	}
+
+	userData := make([]byte, base64.StdEncoding.DecodedLen(len(userDataBase64)))
+	msgLen, err := base64.StdEncoding.Decode(userData, userDataBase64)
+	if err != nil {
+		log.Errorf("Failed to base64-decode user data: %s", err)
+		return nil, err
+	}
+	userData = userData[:msgLen]
 
 	defer ReportReady(p.client)
 
